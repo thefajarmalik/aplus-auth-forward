@@ -1,0 +1,576 @@
+(* ================================================ DATA TYPES ================================================ *)
+
+type Id_t.        
+type Random_t.    (* Nonce *)
+type e_t.         (* DH exponent *)
+type G_t.         (* DH group *)
+type K_t.         (* Symmetric key *)
+type PK_t.        (* Public key *)
+type SK_t.        (* Private key *)
+type MAC_t.       (* MAC *)
+type Sig_t.       (* Signature *)
+type Cert_t.      (* Certificate *)
+type Tag_t.       (* Message type tag *)
+
+(* ================================================ CHANNELS ================================================ *)
+
+(* Public channel *)
+free AS_c:channel.
+free UA_c:channel.
+free US_c:channel.
+
+(* ================================================ TABLES ================================================ *)
+
+(* ================================================ CONSTANTS ================================================ *) 
+
+(* DH generator *)
+const G:G_t.
+
+(* TLS key constants *)
+const CHTS:bitstring.
+const SHTS:bitstring.
+
+(* TLS Application Traffic Key Constants *)
+const CATS:bitstring.
+const SATS:bitstring.
+
+(* Handshake Type *)
+const CERTIFICATE:bitstring.
+const CERTIFICATE_VERIFY:bitstring.
+const FINISHED:bitstring.
+const ZERO: K_t.
+const DERIVED: bitstring.
+
+(* ================================================ FUNCTIONS ================================================ *)
+
+(* Generate a public key from a private key *)
+fun make_pk(SK_t): PK_t.
+
+(* Sign a certificate with a private key *)
+fun signcert(Id_t,PK_t,SK_t): Cert_t.
+
+(* Verify a certificate with a public key *)
+reduc forall id:Id_t,pk:PK_t,sk:SK_t;
+  checkcert(signcert(id,pk,sk),make_pk(sk)) = (id,pk)
+.
+
+(* Read contents of certificate without verifying *)
+reduc forall id:Id_t,pk:PK_t,sk:SK_t;
+  readcert(signcert(id,pk,sk)) = (id,pk)
+.
+
+(* Create a self-signed certificate *)
+letfun selfsigned_certificate(id:Id_t,sk:SK_t) =
+  signcert(id,make_pk(sk),sk)
+.
+
+(* Sign a bitstring with a private key *)
+fun sign(bitstring,SK_t): Sig_t.
+reduc forall bs:bitstring, sk:SK_t;
+  checksign(sign(bs,sk),make_pk(sk)) = bs
+.
+
+(* Authenticated encryption/decryption *)
+fun enc(bitstring,K_t): bitstring.
+reduc forall k:K_t, m:bitstring;
+  dec(enc(m,k),k) = m
+.
+
+(* Diffie-Hellman key exchange *)
+fun DH(e_t,G_t): G_t.
+equation forall x:e_t, y:e_t;
+  DH(y,DH(x,G)) = DH(x,DH(y,G))
+.
+
+(* MAC *)
+fun mac(bitstring,K_t): MAC_t.
+
+(* Hash *)
+fun hash(bitstring): bitstring.
+
+(* KDF *)
+fun hkdf_extract(G_t,K_t): K_t.
+fun hkdf_expand_label(K_t,bitstring): K_t.
+fun derive_secret(K_t,bitstring,bitstring): K_t.
+
+fun toG(bitstring): G_t [typeConverter].
+fun toBS(G_t): bitstring [typeConverter].
+
+
+(* ================================================ EVENTS ================================================ *)
+(* mutual TLS *)
+event AS_ServerFinished(Id_t,Cert_t,K_t).
+event AS_ClientFinished(Id_t,Id_t,Cert_t,Cert_t,K_t).
+event AS_ServerComplete(Id_t,Id_t,Cert_t,Cert_t,K_t).
+
+(* TLS *)
+event UA_ServerFinished(Id_t,Cert_t,K_t).
+event UA_ClientFinished(Id_t,Cert_t,K_t).
+event UA_ServerComplete(Id_t,Cert_t,K_t).
+
+(* TLS *)
+event US_ServerFinished(Id_t,Cert_t,K_t).
+event US_ClientFinished(Id_t,Cert_t,K_t).
+event US_ServerComplete(Id_t,Cert_t,K_t).
+
+(* ================================================ APLUS PROTOCOL ================================================ *)
+const UA_AUTH:Tag_t.
+const AS_OTC:Tag_t.
+const UA_OTC:Tag_t.
+const US_OTC:Tag_t.
+const US_SOLUTION:Tag_t.
+const AS_RESULT:Tag_t.
+const UA_RESULT:Tag_t.
+fun PRG_user(Id_t): Random_t. 
+fun evaluate(Random_t, bitstring): bitstring.
+event UserAuthenticated(Id_t).
+event AplusRequestCode(Id_t, Random_t).
+event AplusReceiveCode(Id_t, Random_t, Random_t).
+event UserReceiveCode(Id_t, Random_t, Random_t).
+event ServerReceiveCode(Random_t, Random_t).
+event UserSendSolution(Id_t, Random_t, bitstring).
+event AplusRequestResult(Id_t, Random_t).
+event ServerSendResult(Random_t, bitstring).
+event AplusReceiveResult(Id_t, Random_t, bitstring).
+
+
+(* ================================================ QUERIES ================================================ *)
+
+(* ++++++++++++++++++++++++++++++++++++++++++++ TLS QUERIES ++++++++++++++++++++++++++++++++++++++++++++ *)
+(* -------------- APLUS-SERVER -------------- *)
+(* Authentication of server to client (true) *)
+query server_id:Id_t, client_id:Id_t, server_cert:Cert_t, client_cert:Cert_t, ms:K_t; inj-event(AS_ClientFinished(server_id, client_id, server_cert, client_cert, ms)) ==> inj-event(AS_ServerFinished(server_id, server_cert, ms)) .
+(* Authentication of client to server (true) *)
+query server_id:Id_t, client_id:Id_t, server_cert:Cert_t, client_cert:Cert_t, ms:K_t; inj-event(AS_ServerComplete(server_id, client_id, server_cert, client_cert, ms)) ==> inj-event(AS_ClientFinished(server_id, client_id, server_cert, client_cert, ms)) .
+(* Reachability (false false false) *)
+query server_id:Id_t, server_cert:Cert_t, ms:K_t; event(AS_ServerFinished(server_id, server_cert, ms)).
+query server_id:Id_t, client_id:Id_t, server_cert:Cert_t, client_cert:Cert_t, ms:K_t; event(AS_ClientFinished(server_id, client_id, server_cert, client_cert, ms)).
+query server_id:Id_t, client_id:Id_t, server_cert:Cert_t, client_cert:Cert_t, ms:K_t; event(AS_ServerComplete(server_id, client_id, server_cert, client_cert, ms)).
+
+(* -------------- USER-APLUS -------------- *)
+(* Authentication of server to client (true) *)
+query server_id:Id_t, server_cert:Cert_t, ms:K_t; inj-event(UA_ClientFinished(server_id, server_cert, ms)) ==> inj-event(UA_ServerFinished(server_id, server_cert, ms)) .
+(* Authentication of client to server (false) *)
+query server_id:Id_t, server_cert:Cert_t, ms:K_t; inj-event(UA_ServerComplete(server_id, server_cert, ms)) ==> inj-event(UA_ClientFinished(server_id, server_cert, ms)) .
+(* Reachability (false false false) *)
+query server_id:Id_t, server_cert:Cert_t, ms:K_t; event(UA_ServerFinished(server_id, server_cert, ms)).
+query server_id:Id_t, server_cert:Cert_t, ms:K_t; event(UA_ClientFinished(server_id, server_cert, ms)).
+query server_id:Id_t, server_cert:Cert_t, ms:K_t; event(UA_ServerComplete(server_id, server_cert, ms)).
+
+(* -------------- USER-SERVER -------------- *)
+(* Authentication of server to client (true) *)
+query server_id:Id_t, server_cert:Cert_t, ms:K_t; inj-event(US_ClientFinished(server_id, server_cert, ms)) ==> inj-event(US_ServerFinished(server_id, server_cert, ms)) .
+(* Authentication of client to server (false) *)
+query server_id:Id_t, server_cert:Cert_t, ms:K_t; inj-event(US_ServerComplete(server_id, server_cert, ms)) ==> inj-event(US_ClientFinished(server_id, server_cert, ms)) .
+(* Reachability (false false false) *)
+query server_id:Id_t, server_cert:Cert_t, ms:K_t; event(US_ServerFinished(server_id, server_cert, ms)).
+query server_id:Id_t, server_cert:Cert_t, ms:K_t; event(US_ClientFinished(server_id, server_cert, ms)).
+query server_id:Id_t, server_cert:Cert_t, ms:K_t; event(US_ServerComplete(server_id, server_cert, ms)).
+
+
+(* ++++++++++++++++++++++++++++++++++++++++++++ AUTH FORWARD QUERIES ++++++++++++++++++++++++++++++++++++++++++++ *)
+(* --- These queries are ordered chronologically according to the expected behaviour --- *)
+
+(* -------------- AUTH USER-APLUS -------------- *)
+(* User authenticated via TLS (true)*)
+query user_id:Id_t, server_id:Id_t, client_id:Id_t, server_cert:Cert_t, client_cert:Cert_t, ms:K_t; inj-event(UserAuthenticated(user_id)) ==> inj-event(UA_ServerComplete(server_id, server_cert, ms)).
+(* Aplus request OTC to server only after user is authenticated (true) *)
+query user_id:Id_t, rand_user_id:Random_t; inj-event(AplusRequestCode(user_id, rand_user_id)) ==> inj-event(UserAuthenticated(user_id)).
+
+(* -------------- OTC APLUS-SERVER -------------- *)
+(* Aplus request OTC via TLS (true) *)
+query user_id:Id_t, rand_user_id:Random_t, server_id:Id_t, client_id:Id_t, server_cert:Cert_t, client_cert:Cert_t, ms:K_t; inj-event(AplusRequestCode(user_id, rand_user_id)) ==> inj-event(AS_ServerComplete(server_id, client_id, server_cert, client_cert, ms)).
+(* Aplus receive code only after requesting it (true) *)
+query user_id:Id_t, rand_user_id:Random_t, code:Random_t; event(AplusReceiveCode(user_id, rand_user_id, code)) ==> event(AplusRequestCode(user_id, rand_user_id)). 
+(* When Aplus receives code, attacker does not know code nor user_id (true true) *)
+query user_id:Id_t, rand_user_id:Random_t, code:Random_t; event(AplusReceiveCode(user_id, rand_user_id, code)) && attacker(code). 
+query user_id:Id_t, rand_user_id:Random_t, code:Random_t; event(AplusReceiveCode(user_id, rand_user_id, code)) && attacker(user_id).
+
+(* -------------- OTC APLUS-USER -------------- *)
+(* User receives code only after Aplus receives code (true) *)
+query user_id:Id_t, rand_user_id:Random_t, code:Random_t, server_id:Id_t, client_id:Id_t, server_cert:Cert_t, client_cert:Cert_t, ms:K_t; inj-event(UserReceiveCode(user_id, rand_user_id, code)) ==> inj-event(AplusReceiveCode(user_id, rand_user_id, code)).
+(* When user receives code, attacker does not know code nor user_id (true true) *)
+query user_id:Id_t, rand_user_id:Random_t, code:Random_t; event(UserReceiveCode(user_id, rand_user_id, code)) && attacker(code).
+query user_id:Id_t, rand_user_id:Random_t, code:Random_t; event(UserReceiveCode(user_id, rand_user_id, code)) && attacker(user_id).
+
+(* -------------- OTC USER-SERVER -------------- *)
+(* Server receives code from user via TLS (true) *)
+query user_id:Id_t, rand_user_id:Random_t, code:Random_t, server_id:Id_t, server_cert:Cert_t, ms:K_t; inj-event(ServerReceiveCode(code, rand_user_id)) ==> inj-event(US_ServerComplete(server_id, server_cert, ms)).
+(* Server receives code only after user receives code (true) *)
+query user_id:Id_t, code:Random_t, rand_user_id:Random_t; inj-event(ServerReceiveCode(code, rand_user_id)) ==> inj-event(UserReceiveCode(user_id, rand_user_id, code)).
+
+(* -------------- RESULT/SOLUTION USER-SERVER -------------- *)
+(* Only authenticated user submits solution (true) *)
+query user_id:Id_t, code:Random_t, rand_user_id:Random_t, solution:bitstring; inj-event(UserSendSolution(user_id, rand_user_id, solution))==>inj-event(ServerReceiveCode(code, rand_user_id)).
+
+(* -------------- RESULT/SOLUTION APLUS-SERVER -------------- *)
+(* Server send result to Aplus only after requested (true) *)
+query result:bitstring, rand_user_id:Random_t, user_id:Id_t; inj-event(ServerSendResult(rand_user_id, result)) ==> inj-event(AplusRequestResult(user_id, rand_user_id)).
+(* Aplus receive result only after server sent it (true) *)
+query result:bitstring, rand_user_id:Random_t, user_id:Id_t; inj-event(AplusReceiveResult(user_id, rand_user_id, result)) ==> inj-event(ServerSendResult(rand_user_id, result)).
+
+(* -------------- OVERALL -------------- *)
+(* Aplus receive result only if the user has submitted solution (true) *)
+query user_id:Id_t, rand_user_id:Random_t, solution:bitstring, result:bitstring; event(AplusReceiveResult(user_id, rand_user_id, result)) ==> event(UserSendSolution(user_id, rand_user_id, solution)).
+(* Aplus receive result for authenticated user (true) *)
+query user_id:Id_t, rand_user_id:Random_t, result:bitstring; event(AplusReceiveResult(user_id, rand_user_id, result)) ==> event(UserAuthenticated(user_id)).
+
+(* ================================================ PROCESSES ================================================ *)
+
+let aplus(ca_pk:PK_t, aplus_sk:SK_t, aplus_cert:Cert_t, aplus_id:Id_t, server_id:Id_t, user_id:Id_t) = 
+    (* ++++++++++++++++++++++++++++++++++++++++++++ USER-APLUS TLS ++++++++++++++++++++++++++++++++++++++++++++ *)
+    (* TLS start *)
+    in(UA_c, UA_client_hello:bitstring);
+    let (UA_chr:Random_t, UA_dhc:G_t) = UA_client_hello in
+    new UA_shr:Random_t;
+    new UA_y:e_t;
+    (* Server hello *)
+    let UA_server_hello = (UA_shr, DH(UA_y, G)) in
+    out(UA_c, UA_server_hello);
+    (* Key derivation *)
+    let UA_handshake_secret = hkdf_extract(DH(UA_y, UA_dhc), derive_secret(ZERO, DERIVED, ())) in
+    let UA_shts = derive_secret(UA_handshake_secret, SHTS, (UA_client_hello, UA_server_hello)) in
+    let UA_chts = derive_secret(UA_handshake_secret, CHTS, (UA_client_hello, UA_server_hello)) in
+    let UA_master_secret = derive_secret(UA_handshake_secret, DERIVED, ()) in
+    let UA_sfk = hkdf_expand_label(UA_shts, FINISHED) in
+    let UA_cfk = hkdf_expand_label(UA_chts, FINISHED) in
+    (* Server certificate *)
+    let UA_server_certificate = enc((CERTIFICATE, aplus_cert), UA_shts) in
+    out(UA_c, UA_server_certificate);
+    (* CertificateVerify *)
+    let UA_transcript_hash = hash((UA_client_hello, UA_server_hello, UA_server_certificate)) in 
+    let UA_server_certificate_verify = enc((CERTIFICATE_VERIFY, sign(UA_transcript_hash, aplus_sk)), UA_shts) in 
+    out(UA_c, UA_server_certificate_verify);
+    (* Server finished *)
+    event UA_ServerFinished(server_id, aplus_cert, UA_master_secret);
+    let UA_server_finished = enc((FINISHED,mac(hash((UA_client_hello, UA_server_hello, UA_server_certificate, UA_server_certificate_verify)), UA_sfk)), UA_shts) in
+    out(UA_c, UA_server_finished);
+    (* Client finished *)
+    in(UA_c, UA_client_finished: bitstring);
+    let (=FINISHED, UA_client_finished_mac:MAC_t) = dec(UA_client_finished, UA_chts) in 
+    let (=UA_client_finished_mac) = mac(hash((UA_client_hello, UA_server_hello, UA_server_certificate, UA_server_certificate_verify, UA_server_finished)), UA_cfk) in
+    event UA_ServerComplete(server_id, aplus_cert, UA_master_secret);
+    (* Application Traffic *)
+    let UA_sats = derive_secret(UA_handshake_secret, SATS, (UA_client_hello, UA_server_hello, UA_server_certificate, UA_server_certificate_verify, UA_server_finished)) in
+    let UA_cats = derive_secret(UA_handshake_secret, CATS, (UA_client_hello, UA_server_hello, UA_server_certificate, UA_server_certificate_verify, UA_server_finished)) in
+
+    (* -------------- Auth forward -------------- *)
+    (* Authenticate user using user id *)
+    in(UA_c,auth:bitstring);
+    let(=UA_AUTH, =user_id) = dec(auth,UA_cats) in
+    event UserAuthenticated(user_id);
+
+    (* ++++++++++++++++++++++++++++++++++++++++++++ APLUS-SERVER TLS ++++++++++++++++++++++++++++++++++++++++++++ *)
+    (* Client hello *)
+    new AS_chr:Random_t;
+    new AS_x:e_t;
+    let AS_client_hello = (AS_chr, DH(AS_x, G)) in
+    out(AS_c, AS_client_hello);
+    (* Server hello *)
+    in(AS_c, AS_server_hello:bitstring);
+    let (AS_shr:Random_t, AS_dhs:G_t) = AS_server_hello in
+    (* Key derivation *)
+    let AS_handshake_secret = hkdf_extract(DH(AS_x, AS_dhs), derive_secret(ZERO, DERIVED, ())) in
+    let AS_shts = derive_secret(AS_handshake_secret, SHTS, (AS_client_hello, AS_server_hello)) in
+    let AS_chts = derive_secret(AS_handshake_secret, CHTS, (AS_client_hello, AS_server_hello)) in
+    let AS_master_secret = derive_secret(AS_handshake_secret, DERIVED, ()) in
+    let AS_sfk = hkdf_expand_label(AS_shts, FINISHED) in
+    let AS_cfk = hkdf_expand_label(AS_chts, FINISHED) in
+    (* Server certificate *)
+    in(AS_c, AS_server_certificate:bitstring);
+    let(=CERTIFICATE, AS_server_cert:Cert_t) = dec(AS_server_certificate, AS_shts) in 
+    let(AS_server_id:Id_t, AS_spk:PK_t) = checkcert(AS_server_cert, ca_pk) in
+    (* TODO: Check if it is the right external service server *)
+    if AS_server_id = server_id then
+    (* Verify transcript hash *)
+    in(AS_c, AS_server_certificate_verify:bitstring);
+    let (=CERTIFICATE_VERIFY, AS_cv:Sig_t) = dec(AS_server_certificate_verify, AS_shts) in   
+    let AS_transcript_hash = checksign(AS_cv, AS_spk) in
+    if AS_transcript_hash = hash((AS_client_hello, AS_server_hello, AS_server_certificate)) then
+    (* Verify server finished *)
+    in(AS_c, AS_server_finished:bitstring);
+    let (=FINISHED, AS_server_finished_mac:MAC_t) = dec(AS_server_finished, AS_shts) in
+    if AS_server_finished_mac = mac(hash((AS_client_hello, AS_server_hello, AS_server_certificate, AS_server_certificate_verify)), AS_sfk) then
+    (* Send client certificate *)
+    let AS_client_certificate = enc((CERTIFICATE, aplus_cert), AS_chts) in
+    out(AS_c, AS_client_certificate);
+    (* Client certificate verify *)
+    let AS_transcript_hash_client = hash((AS_client_hello, AS_server_hello, AS_server_certificate, AS_server_certificate_verify, AS_server_finished, AS_client_certificate)) in 
+    let AS_client_certificate_verify = enc((CERTIFICATE_VERIFY, sign(AS_transcript_hash_client, aplus_sk)), AS_chts) in 
+    out(AS_c, AS_client_certificate_verify);
+    (* Send client finished *)
+    let AS_client_finished = mac(hash((AS_client_hello, AS_server_hello, AS_server_certificate, AS_server_certificate_verify, AS_server_finished, AS_client_certificate, AS_client_certificate_verify)), AS_cfk) in
+    event AS_ClientFinished(AS_server_id, aplus_id, AS_server_cert, aplus_cert, AS_master_secret);
+    out(AS_c, enc((FINISHED, AS_client_finished), AS_chts));
+    (* Application Traffic *)
+    let AS_sats = derive_secret(AS_handshake_secret, SATS, (AS_client_hello, AS_server_hello, AS_server_certificate, AS_server_certificate_verify, AS_server_finished)) in
+    let AS_cats = derive_secret(AS_handshake_secret, CATS, (AS_client_hello, AS_server_hello, AS_server_certificate, AS_server_certificate_verify, AS_server_finished)) in
+    
+    (* -------------- Auth forward -------------- *)
+    (* Send request for OTC to server*)
+    let (rand_user_id:Random_t) = PRG_user(user_id) in
+    let (otc_request:bitstring) = enc((AS_OTC, rand_user_id),AS_cats) in
+    event AplusRequestCode(user_id, rand_user_id);
+    out(AS_c, otc_request);
+    (* Receive OTC from server *)
+    in(AS_c, otc_response:bitstring);
+    let(=AS_OTC, =rand_user_id, code:Random_t)=dec(otc_response, AS_sats) in
+    event AplusReceiveCode(user_id, rand_user_id, code);
+    (* Send OTC to user *)
+    let (otc_to_user:bitstring) = enc((UA_OTC, user_id, rand_user_id, code),UA_sats) in
+    out(UA_c,otc_to_user);
+
+    (* Send request for result to server *)
+    let (result_request:bitstring) = enc((AS_RESULT,rand_user_id),AS_cats) in
+    event AplusRequestResult(user_id, rand_user_id);
+    out(AS_c, result_request);
+    (* Receive result from server *)
+    in(AS_c, result_response:bitstring);
+    let(=AS_RESULT, result:bitstring)=dec(result_response, AS_sats) in
+    event AplusReceiveResult(user_id, rand_user_id, result);
+
+    0.
+
+let server(ca_pk:PK_t, server_sk:SK_t, server_cert:Cert_t, server_id:Id_t, aplus_id:Id_t) = 
+    (* ++++++++++++++++++++++++++++++++++++++++++++ APLUS-SERVER TLS ++++++++++++++++++++++++++++++++++++++++++++ *)
+    (* TLS start *)
+    in(AS_c, AS_client_hello:bitstring);
+    let (AS_chr:Random_t, AS_dhc:G_t) = AS_client_hello in
+    new AS_shr:Random_t;
+    new AS_y:e_t;
+    (* Server hello *)
+    let AS_server_hello = (AS_shr, DH(AS_y, G)) in
+    out(AS_c, AS_server_hello);
+    (* Key derivation *)
+    let AS_handshake_secret = hkdf_extract(DH(AS_y, AS_dhc), derive_secret(ZERO, DERIVED, ())) in
+    let AS_shts = derive_secret(AS_handshake_secret, SHTS, (AS_client_hello, AS_server_hello)) in
+    let AS_chts = derive_secret(AS_handshake_secret, CHTS, (AS_client_hello, AS_server_hello)) in
+    let AS_master_secret = derive_secret(AS_handshake_secret, DERIVED, ()) in
+    let AS_sfk = hkdf_expand_label(AS_shts, FINISHED) in
+    let AS_cfk = hkdf_expand_label(AS_chts, FINISHED) in
+    (* Server certificate *)
+    let AS_server_certificate = enc((CERTIFICATE, server_cert), AS_shts) in
+    out(AS_c, AS_server_certificate);
+    (* CertificateVerify *)
+    let AS_transcript_hash = hash((AS_client_hello, AS_server_hello, AS_server_certificate)) in 
+    let AS_server_certificate_verify = enc((CERTIFICATE_VERIFY, sign(AS_transcript_hash, server_sk)), AS_shts) in 
+    out(AS_c, AS_server_certificate_verify);
+    (* Server finished *)
+    event AS_ServerFinished(server_id, server_cert, AS_master_secret);
+    let AS_server_finished = enc((FINISHED,mac(hash((AS_client_hello, AS_server_hello, AS_server_certificate, AS_server_certificate_verify)), AS_sfk)), AS_shts) in
+    out(AS_c, AS_server_finished);
+    (* Client certificate *)
+    in(AS_c, AS_client_certificate:bitstring);
+    let(=CERTIFICATE, AS_client_cert:Cert_t) = dec(AS_client_certificate, AS_chts) in 
+    let(AS_client_id:Id_t, AS_cpk:PK_t) = checkcert(AS_client_cert, ca_pk) in
+    (* So that server knows if it is interacting with Aplus or client *)
+    if AS_client_id = aplus_id then
+    (* Client certificate verify *)
+    in(AS_c, AS_client_certificate_verify:bitstring);
+    let (=CERTIFICATE_VERIFY, AS_cv:Sig_t) = dec(AS_client_certificate_verify, AS_chts) in   
+    let AS_transcript_hash_client = checksign(AS_cv, AS_cpk) in
+    if AS_transcript_hash_client = hash((AS_client_hello, AS_server_hello, AS_server_certificate, AS_server_certificate_verify, AS_server_finished, AS_client_certificate)) then
+    (* Client finished *)
+    in(AS_c, AS_client_finished: bitstring);
+    let (=FINISHED, AS_client_finished_mac:MAC_t) = dec(AS_client_finished, AS_chts) in 
+    if AS_client_finished_mac  = mac(hash((AS_client_hello, AS_server_hello, AS_server_certificate, AS_server_certificate_verify, AS_server_finished, AS_client_certificate, AS_client_certificate_verify)), AS_cfk) then
+    event AS_ServerComplete(server_id, AS_client_id, server_cert, AS_client_cert, AS_master_secret);
+    (* Application Traffic *)
+    let AS_sats = derive_secret(AS_handshake_secret, SATS, (AS_client_hello, AS_server_hello, AS_server_certificate, AS_server_certificate_verify, AS_server_finished)) in
+    let AS_cats = derive_secret(AS_handshake_secret, CATS, (AS_client_hello, AS_server_hello, AS_server_certificate, AS_server_certificate_verify, AS_server_finished)) in
+
+    (* -------------- Auth forward -------------- *)
+    (* Receive request for OTC *)
+    in(AS_c,otc_request:bitstring);
+    let (=AS_OTC, rand_user_id:Random_t) = dec(otc_request, AS_cats) in
+    new code:Random_t;
+    let otc_response = enc((AS_OTC, rand_user_id, code), AS_sats) in
+    out(AS_c,otc_response);
+
+    (* if false then *)
+    (* ++++++++++++++++++++++++++++++++++++++++++++ USER-SERVER TLS ++++++++++++++++++++++++++++++++++++++++++++ *)
+    (* TLS start *)
+    in(US_c, US_client_hello:bitstring);
+    let (US_chr:Random_t, US_dhc:G_t) = US_client_hello in
+    new US_shr:Random_t;
+    new US_y:e_t;
+    (* Server hello *)
+    let US_server_hello = (US_shr, DH(US_y, G)) in
+    out(US_c, US_server_hello);
+    (* Key derivation *)
+    let US_handshake_secret = hkdf_extract(DH(US_y, US_dhc), derive_secret(ZERO, DERIVED, ())) in
+    let US_shts = derive_secret(US_handshake_secret, SHTS, (US_client_hello, US_server_hello)) in
+    let US_chts = derive_secret(US_handshake_secret, CHTS, (US_client_hello, US_server_hello)) in
+    let US_master_secret = derive_secret(US_handshake_secret, DERIVED, ()) in
+    let US_sfk = hkdf_expand_label(US_shts, FINISHED) in
+    let US_cfk = hkdf_expand_label(US_chts, FINISHED) in
+    (* Server certificate *)
+    let US_server_certificate = enc((CERTIFICATE, server_cert), US_shts) in
+    out(US_c, US_server_certificate);
+    (* CertificateVerify *)
+    let US_transcript_hash = hash((US_client_hello, US_server_hello, US_server_certificate)) in 
+    let US_server_certificate_verify = enc((CERTIFICATE_VERIFY, sign(US_transcript_hash, server_sk)), US_shts) in 
+    out(US_c, US_server_certificate_verify);
+    (* Server finished *)
+    event US_ServerFinished(server_id, server_cert, US_master_secret);
+    let US_server_finished = enc((FINISHED,mac(hash((US_client_hello, US_server_hello, US_server_certificate, US_server_certificate_verify)), US_sfk)), US_shts) in
+    out(US_c, US_server_finished);
+    (* Client finished *)
+    in(US_c, US_client_finished: bitstring);
+    let (=FINISHED, US_client_finished_mac:MAC_t) = dec(US_client_finished, US_chts) in 
+    let (=US_client_finished_mac) = mac(hash((US_client_hello, US_server_hello, US_server_certificate, US_server_certificate_verify, US_server_finished)), US_cfk) in
+    event US_ServerComplete(server_id, server_cert, US_master_secret);
+    (* Application Traffic *)
+    let US_sats = derive_secret(US_handshake_secret, SATS, (US_client_hello, US_server_hello, US_server_certificate, US_server_certificate_verify, US_server_finished)) in
+    let US_cats = derive_secret(US_handshake_secret, CATS, (US_client_hello, US_server_hello, US_server_certificate, US_server_certificate_verify, US_server_finished)) in
+
+    (* -------------- Auth forward -------------- *)
+    (* Server receives OTC from user *)    
+    in(US_c,otc_to_server:bitstring);
+    let (=US_OTC, =code) = dec(otc_to_server, US_cats) in
+    event ServerReceiveCode(code, rand_user_id);
+
+    (* Server receives solution from user *)
+    in(US_c, solution_to_server:bitstring);
+    let (=US_SOLUTION, solution:bitstring) = dec(solution_to_server, US_cats) in
+
+    (* Receives request for result from aplus *)
+    in(AS_c,result_request:bitstring);
+    let (=AS_RESULT, =rand_user_id) = dec(result_request, AS_cats) in
+    let result = evaluate(rand_user_id, solution) in
+    let result_response = enc((AS_RESULT, result), AS_sats) in
+    event ServerSendResult(rand_user_id, result);
+    out(AS_c,result_response);
+
+    0.
+
+let user(ca_pk:PK_t, user_id:Id_t, aplus_id:Id_t, server_id:Id_t) = 
+    (* ++++++++++++++++++++++++++++++++++++++++++++ USER-APLUS TLS ++++++++++++++++++++++++++++++++++++++++++++ *)
+    (* Client hello *)
+    new UA_chr:Random_t;
+    new UA_x:e_t;
+    let UA_client_hello = (UA_chr, DH(UA_x, G)) in
+    out(UA_c, UA_client_hello);
+    (* Server hello *)
+    in(UA_c, UA_server_hello:bitstring);
+    let (UA_shr:Random_t, UA_dhs:G_t) = UA_server_hello in
+    (* Key derivation *)
+    let UA_handshake_secret = hkdf_extract(DH(UA_x, UA_dhs), derive_secret(ZERO, DERIVED, ())) in
+    let UA_shts = derive_secret(UA_handshake_secret, SHTS, (UA_client_hello, UA_server_hello)) in
+    let UA_chts = derive_secret(UA_handshake_secret, CHTS, (UA_client_hello, UA_server_hello)) in
+    let UA_master_secret = derive_secret(UA_handshake_secret, DERIVED, ()) in
+    let UA_sfk = hkdf_expand_label(UA_shts, FINISHED) in
+    let UA_cfk = hkdf_expand_label(UA_chts, FINISHED) in
+    (* Server certificate *)
+    in(UA_c, UA_server_certificate:bitstring);
+    let(=CERTIFICATE, UA_server_cert:Cert_t) = dec(UA_server_certificate, UA_shts) in 
+    let(UA_server_id:Id_t, UA_spk:PK_t) = checkcert(UA_server_cert, ca_pk) in
+    (* Check if domain is aplus *)
+    if UA_server_id = aplus_id then
+    (* Verify transcript hash *)
+    in(UA_c, UA_server_certificate_verify:bitstring);
+    let (=CERTIFICATE_VERIFY, UA_cv:Sig_t) = dec(UA_server_certificate_verify, UA_shts) in   
+    let UA_transcript_hash = checksign(UA_cv, UA_spk) in
+    if UA_transcript_hash = hash((UA_client_hello, UA_server_hello, UA_server_certificate)) then
+    (* Verify server finished *)
+    in(UA_c, UA_server_finished:bitstring);
+    let (=FINISHED, UA_server_finished_mac:MAC_t) = dec(UA_server_finished, UA_shts) in
+    if UA_server_finished_mac = mac(hash((UA_client_hello, UA_server_hello, UA_server_certificate, UA_server_certificate_verify)), UA_sfk) then
+    event UA_ClientFinished(UA_server_id, UA_server_cert, UA_master_secret);
+    (* Send client finished *)
+    let UA_client_finished = mac(hash((UA_client_hello, UA_server_hello, UA_server_certificate, UA_server_certificate_verify, UA_server_finished)), UA_cfk) in
+    out(UA_c, enc((FINISHED, UA_client_finished), UA_chts));
+    (* Application Traffic *)
+    let UA_sats = derive_secret(UA_handshake_secret, SATS, (UA_client_hello, UA_server_hello, UA_server_certificate, UA_server_certificate_verify, UA_server_finished)) in
+    let UA_cats = derive_secret(UA_handshake_secret, CATS, (UA_client_hello, UA_server_hello, UA_server_certificate, UA_server_certificate_verify, UA_server_finished)) in
+
+    (* -------------- Auth forward -------------- *)
+    (* User authenticates to Aplus *)
+    let auth = enc((UA_AUTH,user_id), UA_cats) in
+    out(UA_c,auth);
+    
+    (* User receives OTC from Aplus *)
+    in(UA_c, otc_to_user:bitstring);
+    let(=UA_OTC, =user_id, rand_user_id:Random_t, code:Random_t)=dec(otc_to_user, UA_sats) in
+    event UserReceiveCode(user_id, rand_user_id, code);
+
+    (* if false then *)
+    (* ++++++++++++++++++++++++++++++++++++++++++++ USER-SERVER TLS ++++++++++++++++++++++++++++++++++++++++++++ *)
+    (* Client hello *)
+    new US_chr:Random_t;
+    new US_x:e_t;
+    let US_client_hello = (US_chr, DH(US_x, G)) in
+    out(US_c, US_client_hello);
+    (* Server hello *)
+    in(US_c, US_server_hello:bitstring);
+    let (US_shr:Random_t, US_dhs:G_t) = US_server_hello in
+    (* Key derivation *)
+    let US_handshake_secret = hkdf_extract(DH(US_x, US_dhs), derive_secret(ZERO, DERIVED, ())) in
+    let US_shts = derive_secret(US_handshake_secret, SHTS, (US_client_hello, US_server_hello)) in
+    let US_chts = derive_secret(US_handshake_secret, CHTS, (US_client_hello, US_server_hello)) in
+    let US_master_secret = derive_secret(US_handshake_secret, DERIVED, ()) in
+    let US_sfk = hkdf_expand_label(US_shts, FINISHED) in
+    let US_cfk = hkdf_expand_label(US_chts, FINISHED) in
+    (* Server certificate *)
+    in(US_c, US_server_certificate:bitstring);
+    let(=CERTIFICATE, US_server_cert:Cert_t) = dec(US_server_certificate, US_shts) in 
+    let(US_server_id:Id_t, US_spk:PK_t) = checkcert(US_server_cert, ca_pk) in
+    (* Check if server is actual server *)
+    if US_server_id = server_id then
+    (* Verify transcript hash *)
+    in(US_c, US_server_certificate_verify:bitstring);
+    let (=CERTIFICATE_VERIFY, US_cv:Sig_t) = dec(US_server_certificate_verify, US_shts) in   
+    let US_transcript_hash = checksign(US_cv, US_spk) in
+    if US_transcript_hash = hash((US_client_hello, US_server_hello, US_server_certificate)) then
+    (* Verify server finished *)
+    in(US_c, US_server_finished:bitstring);
+    let (=FINISHED, US_server_finished_mac:MAC_t) = dec(US_server_finished, US_shts) in
+    if US_server_finished_mac = mac(hash((US_client_hello, US_server_hello, US_server_certificate, US_server_certificate_verify)), US_sfk) then
+    event US_ClientFinished(US_server_id, US_server_cert, US_master_secret);
+    (* Send client finished *)
+    let US_client_finished = mac(hash((US_client_hello, US_server_hello, US_server_certificate, US_server_certificate_verify, US_server_finished)), US_cfk) in
+    out(US_c, enc((FINISHED, US_client_finished), US_chts));
+    (* Application Traffic *)
+    let US_sats = derive_secret(US_handshake_secret, SATS, (US_client_hello, US_server_hello, US_server_certificate, US_server_certificate_verify, US_server_finished)) in
+    let US_cats = derive_secret(US_handshake_secret, CATS, (US_client_hello, US_server_hello, US_server_certificate, US_server_certificate_verify, US_server_finished)) in
+    
+    (* -------------- Auth forward -------------- *)
+    (* User sends OTC to server *)
+    let (otc_to_server:bitstring) = enc((US_OTC, code), US_cats) in
+    out(US_c,otc_to_server);
+
+    (* User sends solution to server *)
+    new solution:bitstring;
+    let (solution_to_server:bitstring) = enc((US_SOLUTION, solution),US_cats) in
+    event UserSendSolution(user_id, rand_user_id, solution);
+    out(US_c, solution_to_server);
+
+    0.
+
+process 
+    (* CA *)
+    new ca_sk:SK_t; let ca_pk = make_pk(ca_sk) in
+    out(AS_c, ca_pk);
+    out(UA_c, ca_pk);
+    out(US_c, ca_pk);
+
+    (* Server certificate *)
+    new server_id:Id_t;
+    new server_sk:SK_t; let server_pk = make_pk(server_sk) in
+    let server_cert = signcert(server_id, server_pk, ca_sk) in
+    out(AS_c, server_cert);
+    out(UA_c, server_cert);
+    out(US_c, server_cert);
+
+    (* Aplus certificate *)
+    new aplus_id:Id_t;
+    new aplus_sk:SK_t; let aplus_pk = make_pk(aplus_sk) in
+    let aplus_cert = signcert(aplus_id, aplus_pk, ca_sk) in
+    out(AS_c, aplus_cert);
+    out(UA_c, aplus_cert);
+    out(US_c, aplus_cert);
+
+    (* User id (student number) *)
+    new user_id:Id_t;
+
+    !server(ca_pk, server_sk, server_cert, server_id, aplus_id) | !aplus(ca_pk, aplus_sk, aplus_cert, aplus_id, server_id, user_id) | !user(ca_pk, user_id, aplus_id, server_id)

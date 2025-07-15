@@ -1,0 +1,227 @@
+(* ================================================ DATA TYPES ================================================ *)
+
+type Id_t.        
+type Random_t.    (* Nonce *)
+type e_t.         (* DH exponent *)
+type G_t.         (* DH group *)
+type K_t.         (* Symmetric key *)
+type PK_t.        (* Public key *)
+type SK_t.        (* Private key *)
+type MAC_t.       (* MAC *)
+type Sig_t.       (* Signature *)
+type Cert_t.      (* Certificate *)
+type Tag_t.       (* Message type tag *)
+
+(* ================================================ CHANNELS ================================================ *)
+
+(* Public channel *)
+(* free AS_c:channel. *)
+free UA_c:channel.
+free US_c:channel.
+free AS_c:channel.
+
+(* ================================================ TABLES ================================================ *)
+
+(* ================================================ CONSTANTS ================================================ *) 
+
+(* DH generator *)
+const G:G_t.
+
+(* TLS key constants *)
+const CHTS:bitstring.
+const SHTS:bitstring.
+
+(* TLS Application Traffic Key Constants *)
+const CATS:bitstring.
+const SATS:bitstring.
+
+(* Handshake Type *)
+const CERTIFICATE:bitstring.
+const CERTIFICATE_VERIFY:bitstring.
+const FINISHED:bitstring.
+const ZERO: K_t.
+const DERIVED: bitstring.
+
+(* ================================================ FUNCTIONS ================================================ *)
+
+(* Generate a public key from a private key *)
+fun make_pk(SK_t): PK_t.
+
+(* Sign a certificate with a private key *)
+fun signcert(Id_t,PK_t,SK_t): Cert_t.
+
+(* Verify a certificate with a public key *)
+reduc forall id:Id_t,pk:PK_t,sk:SK_t;
+  checkcert(signcert(id,pk,sk),make_pk(sk)) = (id,pk)
+.
+
+(* Read contents of certificate without verifying *)
+reduc forall id:Id_t,pk:PK_t,sk:SK_t;
+  readcert(signcert(id,pk,sk)) = (id,pk)
+.
+
+(* Create a self-signed certificate *)
+letfun selfsigned_certificate(id:Id_t,sk:SK_t) =
+  signcert(id,make_pk(sk),sk)
+.
+
+(* Sign a bitstring with a private key *)
+fun sign(bitstring,SK_t): Sig_t.
+reduc forall bs:bitstring, sk:SK_t;
+  checksign(sign(bs,sk),make_pk(sk)) = bs
+.
+
+(* Authenticated encryption/decryption *)
+fun enc(bitstring,K_t): bitstring.
+reduc forall k:K_t, m:bitstring;
+  dec(enc(m,k),k) = m
+.
+
+(* Diffie-Hellman key exchange *)
+fun DH(e_t,G_t): G_t.
+equation forall x:e_t, y:e_t;
+  DH(y,DH(x,G)) = DH(x,DH(y,G))
+.
+
+(* MAC *)
+fun mac(bitstring,K_t): MAC_t.
+
+(* Hash *)
+fun hash(bitstring): bitstring.
+
+(* KDF *)
+fun hkdf_extract(G_t,K_t): K_t.
+fun hkdf_expand_label(K_t,bitstring): K_t.
+fun derive_secret(K_t,bitstring,bitstring): K_t.
+
+fun toG(bitstring): G_t [typeConverter].
+fun toBS(G_t): bitstring [typeConverter].
+
+
+(* ================================================ APLUS PROTOCOL ================================================ *)
+const UA_AUTH:Tag_t.
+const AS_OTC_REQ:Tag_t.
+const AS_OTC_RES:Tag_t.
+const UA_OTC:Tag_t.
+const US_OTC:Tag_t.
+const US_TASK:Tag_t.
+const US_SOLUTION:Tag_t.
+const AS_RESULT_REQ:Tag_t.
+const AS_RESULT_RES:Tag_t.
+const UA_RESULT:Tag_t.
+fun PRG_user(Id_t): Random_t. 
+fun solveTask(bitstring): bitstring.
+fun evaluate(bitstring): bitstring.
+
+not attacker(new UA_key).
+not attacker(new US_key).
+not attacker(new AS_key).
+
+(* ================================================ PROCESSES ================================================ *)
+
+let aplus(user_id:Id_t, UA_key:K_t, AS_key:K_t) = 
+    (* -------------- Auth forward -------------- *)
+    (* Authenticate user using user id *)
+    in(UA_c,auth:bitstring);
+    let(=UA_AUTH, =user_id) = dec(auth,UA_key) in
+
+    (* -------------- Auth forward -------------- *)
+    (* Send request for OTC to server*)
+    new aplus_nonce1: Random_t;
+    let (real_rand_user_id:Random_t) = PRG_user(user_id) in
+    new fake_rand_user_id:Random_t;
+    let (rand_user_id:Random_t)= choice[real_rand_user_id, fake_rand_user_id] in
+    let (otc_request:bitstring) = enc((AS_OTC_REQ, rand_user_id, aplus_nonce1), AS_key) in
+    out(AS_c, otc_request);
+
+    (* Receive OTC from server *)
+    in(AS_c, otc_response:bitstring);
+    let(=AS_OTC_RES, code:Random_t, =aplus_nonce1) = dec(otc_response, AS_key) in
+
+    (* Send OTC to user *)
+    let (otc_to_user:bitstring) = enc((UA_OTC, user_id, rand_user_id, code),UA_key) in
+    out(UA_c,otc_to_user);
+
+    (* Send request for result to server *)
+    new aplus_nonce2: Random_t;
+    let (result_request:bitstring) = enc((AS_RESULT_REQ, rand_user_id, aplus_nonce2), AS_key) in
+    out(AS_c, result_request);
+    (* Receive result from server *)
+    in(AS_c, result_response:bitstring);
+    let(=AS_RESULT_RES, result:bitstring, =aplus_nonce2) = dec(result_response, AS_key) in
+
+    0.
+
+let server(US_key:K_t, AS_key:K_t) = 
+    (* -------------- Auth forward -------------- *)
+    (* Receive request for OTC *)
+    in(AS_c,otc_request:bitstring);
+    let (=AS_OTC_REQ, rand_user_id:Random_t, aplus_nonce1: Random_t) = dec(otc_request, AS_key) in
+    new code:Random_t;
+    let otc_response = enc((AS_OTC_RES, code, aplus_nonce1), AS_key) in
+    out(AS_c,otc_response);
+
+    (* -------------- Auth forward -------------- *)
+    (* Server receives OTC from user *)    
+    in(US_c,otc_to_server:bitstring);
+    let (=US_OTC, =code) = dec(otc_to_server, US_key) in
+
+    (* Server sends task to user *)
+    new task:bitstring;
+    let (task_to_user:bitstring) = enc((US_TASK, task), US_key) in
+    out(US_c,task_to_user);
+
+    (* Server receives solution from user *)
+    in(US_c, solution_to_server:bitstring);
+    let (=US_SOLUTION, solution:bitstring) = dec(solution_to_server, US_key) in
+
+    (* Receives request for result from aplus *)
+    in(AS_c,result_request:bitstring);
+    let (=AS_RESULT_REQ, result_rand_user_id:Random_t, aplus_nonce2:Random_t) = dec(result_request, AS_key) in
+    (* new fake_solution:bitstring;
+    let result = (if result_rand_user_id = rand_user_id then evaluate(rand_user_id, solution) else evaluate(result_rand_user_id, fake_solution)) in *)
+    let result = evaluate(solution) in
+    let result_response = enc((AS_RESULT_RES, result, aplus_nonce2), AS_key) in
+    out(AS_c,result_response);
+
+    0.
+
+let user(user_id:Id_t, US_key:K_t, UA_key:K_t) = 
+    (* -------------- Auth forward -------------- *)
+    (* User authenticates to Aplus *)
+    let auth = enc((UA_AUTH,user_id), UA_key) in
+    out(UA_c,auth);
+    
+    (* User receives OTC from Aplus *)
+    in(UA_c, otc_to_user:bitstring);
+    let(=UA_OTC, =user_id, rand_user_id:Random_t, code:Random_t)=dec(otc_to_user, UA_key) in
+
+    (* -------------- Auth forward -------------- *)
+    (* User sends OTC to server *)
+    let (otc_to_server:bitstring) = enc((US_OTC, code), US_key) in
+    out(US_c,otc_to_server);
+
+    (* User receives task from server *)
+    in(US_c,task_to_user:bitstring);
+    let (=US_TASK, task:bitstring) = dec(task_to_user, US_key) in
+
+    (* User sends solution to server *)
+    (* let solution:bitstring = solveTask(task) in *)
+    new solution:bitstring;
+    let (solution_to_server:bitstring) = enc((US_SOLUTION, solution),US_key) in
+    out(US_c, solution_to_server);
+
+    0.
+
+process 
+    (* User id (student number) *)
+    new user_id:Id_t;
+
+    (* Keys for each tunnel *)
+    new UA_key: K_t;
+    new US_key: K_t;
+    new AS_key: K_t;
+
+    !server(US_key, AS_key) | 
+    !aplus(user_id, UA_key, AS_key) | 
+    !user(user_id, US_key, UA_key)

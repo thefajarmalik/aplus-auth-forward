@@ -1,0 +1,229 @@
+(* ===== DATA TYPES ===== *)
+
+type Id_t.        
+type Random_t.    (* Nonce *)
+type e_t.         (* DH exponent *)
+type G_t.         (* DH group *)
+type K_t.         (* Symmetric key *)
+type PK_t.        (* Public key *)
+type SK_t.        (* Private key *)
+type MAC_t.       (* MAC *)
+type Sig_t.       (* Signature *)
+type Cert_t.      (* Certificate *)
+type Tag_t.       (* Message type tag *)
+
+(* ===== CHANNELS ===== *)
+
+(* Public channel *)
+free c:channel.
+
+(* ===== TABLES ===== *)
+
+(* ===== CONSTANTS ===== *) 
+
+(* DH generator *)
+const G:G_t.
+
+(* TLS key constants *)
+const CHTS:bitstring.
+const SHTS:bitstring.
+
+(* TLS Application Traffic Key Constants *)
+const CATS:bitstring.
+const SATS:bitstring.
+
+(* Handshake Type *)
+const CERTIFICATE:bitstring.
+const CERTIFICATE_VERIFY:bitstring.
+const FINISHED:bitstring.
+const ZERO: K_t.
+const DERIVED: bitstring.
+
+(* ===== FUNCTIONS ===== *)
+
+(* Generate a public key from a private key *)
+fun make_pk(SK_t): PK_t.
+
+(* Sign a certificate with a private key *)
+fun signcert(Id_t,PK_t,SK_t): Cert_t.
+
+(* Verify a certificate with a public key *)
+reduc forall id:Id_t,pk:PK_t,sk:SK_t;
+  checkcert(signcert(id,pk,sk),make_pk(sk)) = (id,pk)
+.
+
+(* Read contents of certificate without verifying *)
+reduc forall id:Id_t,pk:PK_t,sk:SK_t;
+  readcert(signcert(id,pk,sk)) = (id,pk)
+.
+
+(* Create a self-signed certificate *)
+letfun selfsigned_certificate(id:Id_t,sk:SK_t) =
+  signcert(id,make_pk(sk),sk)
+.
+
+(* Sign a bitstring with a private key *)
+fun sign(bitstring,SK_t): Sig_t.
+reduc forall bs:bitstring, sk:SK_t;
+  checksign(sign(bs,sk),make_pk(sk)) = bs
+.
+
+(* Authenticated encryption/decryption *)
+fun enc(bitstring,K_t): bitstring.
+reduc forall k:K_t, m:bitstring;
+  dec(enc(m,k),k) = m
+.
+
+(* Diffie-Hellman key exchange *)
+fun DH(e_t,G_t): G_t.
+equation forall x:e_t, y:e_t;
+  DH(y,DH(x,G)) = DH(x,DH(y,G))
+.
+
+(* MAC *)
+fun mac(bitstring,K_t): MAC_t.
+
+(* Hash *)
+fun hash(bitstring): bitstring.
+
+(* KDF *)
+fun hkdf_extract(G_t,K_t): K_t.
+fun hkdf_expand_label(K_t,bitstring): K_t.
+fun derive_secret(K_t,bitstring,bitstring): K_t.
+
+fun toG(bitstring): G_t [typeConverter].
+fun toBS(G_t): bitstring [typeConverter].
+
+
+(* ===== EVENTS ===== *)
+event ServerFinished(Id_t,Cert_t,K_t).
+event ClientFinished(Id_t,Id_t,Cert_t,Cert_t,K_t).
+event ServerComplete(Id_t,Id_t,Cert_t,Cert_t,K_t).
+event Compromise(Id_t).
+event Test(Id_t).
+
+
+(* ===== QUERIES ===== *)
+
+(* Authentication of server to client *)
+query server_id:Id_t, client_id:Id_t, server_cert:Cert_t, client_cert:Cert_t, ms:K_t; event(ClientFinished(server_id, client_id, server_cert, client_cert, ms)) ==> inj-event(ServerFinished(server_id, server_cert, ms)) .
+(* Authentication of client to server *)
+query server_id:Id_t, client_id:Id_t, server_cert:Cert_t, client_cert:Cert_t, ms:K_t; event(ServerComplete(server_id, client_id, server_cert, client_cert, ms)) ==> inj-event(ClientFinished(server_id, client_id, server_cert, client_cert, ms)) .
+
+(* Reachability *)
+query server_id:Id_t, server_cert:Cert_t, ms:K_t; event(ServerFinished(server_id, server_cert, ms)) (* ==> event(Compromise(server_id)) *).
+query server_id:Id_t, client_id:Id_t, server_cert:Cert_t, client_cert:Cert_t, ms:K_t; event(ClientFinished(server_id, client_id, server_cert, client_cert, ms)) (* ==> event(Compromise(server_id)) || event(Compromise(client_id)) *) .
+query server_id:Id_t, client_id:Id_t, server_cert:Cert_t, client_cert:Cert_t, ms:K_t; event(ServerComplete(server_id, client_id, server_cert, client_cert, ms)) (* ==> event(Compromise(server_id)) || event(Compromise(client_id)) *) .
+
+
+(* ===== PROCESSES ===== *)
+let server(ca_pk:PK_t, ssk:SK_t, server_cert:Cert_t, server_id:Id_t) = 
+    (* TLS start *)
+    in(c, client_hello:bitstring);
+    let (chr:Random_t, dhc:G_t) = client_hello in
+    new shr:Random_t;
+    new y:e_t;
+    (* Server hello *)
+    let server_hello = (shr, DH(y, G)) in
+    out(c, server_hello);
+    (* Key derivation *)
+    let handshake_secret = hkdf_extract(DH(y, dhc), derive_secret(ZERO, DERIVED, ())) in
+    let shts = derive_secret(handshake_secret, SHTS, (client_hello, server_hello)) in
+    let chts = derive_secret(handshake_secret, CHTS, (client_hello, server_hello)) in
+    let master_secret = derive_secret(handshake_secret, DERIVED, ()) in
+    let sfk = hkdf_expand_label(shts, FINISHED) in
+    let cfk = hkdf_expand_label(chts, FINISHED) in
+    (* Server certificate *)
+    let server_certificate = enc((CERTIFICATE, server_cert), shts) in
+    out(c, server_certificate);
+    (* CertificateVerify *)
+    let transcript_hash = hash((client_hello, server_hello, server_certificate)) in 
+    let server_certificate_verify = enc((CERTIFICATE_VERIFY, sign(transcript_hash, ssk)), shts) in 
+    out(c, server_certificate_verify);
+    (* Server finished *)
+    event ServerFinished(server_id, server_cert, master_secret);
+    let server_finished = enc((FINISHED,mac(hash((client_hello, server_hello, server_certificate, server_certificate_verify)), sfk)), shts) in
+    out(c, server_finished);
+    (* Client certificate *)
+    in(c, client_certificate:bitstring);
+    let(=CERTIFICATE, client_cert:Cert_t) = dec(client_certificate, chts) in 
+    let(client_id:Id_t, cpk:PK_t) = checkcert(client_cert, ca_pk) in
+    (* Client certificate verify *)
+    in(c, client_certificate_verify:bitstring);
+    let (=CERTIFICATE_VERIFY, cv:Sig_t) = dec(client_certificate_verify, chts) in   
+    let transcript_hash_client = checksign(cv, cpk) in
+    if transcript_hash_client = hash((client_hello, server_hello, server_certificate, server_certificate_verify, server_finished, client_certificate)) then
+    (* Client finished *)
+    in(c, client_finished: bitstring);
+    let (=FINISHED, client_finished_mac:MAC_t) = dec(client_finished, chts) in 
+    if client_finished_mac  = mac(hash((client_hello, server_hello, server_certificate, server_certificate_verify, server_finished, client_certificate, client_certificate_verify)), cfk) then
+    event ServerComplete(server_id, client_id, server_cert, client_cert, master_secret);
+
+    (* Application Traffic *)
+    let sats = derive_secret(handshake_secret, SATS, (client_hello, server_hello, server_certificate, server_certificate_verify, server_finished)) in
+    let cats = derive_secret(handshake_secret, CATS, (client_hello, server_hello, server_certificate, server_certificate_verify, server_finished)) in
+
+    0.
+
+let client(ca_pk:PK_t, csk:SK_t, client_cert:Cert_t, client_id:Id_t) = 
+    (* Client hello *)
+    new chr:Random_t;
+    new x:e_t;
+    let client_hello = (chr, DH(x, G)) in
+    out(c, client_hello);
+    (* Server hello *)
+    in(c, server_hello:bitstring);
+    let (shr:Random_t, dhs:G_t) = server_hello in
+    (* Key derivation *)
+    let handshake_secret = hkdf_extract(DH(x, dhs), derive_secret(ZERO, DERIVED, ())) in
+    let shts = derive_secret(handshake_secret, SHTS, (client_hello, server_hello)) in
+    let chts = derive_secret(handshake_secret, CHTS, (client_hello, server_hello)) in
+    let master_secret = derive_secret(handshake_secret, DERIVED, ()) in
+    let sfk = hkdf_expand_label(shts, FINISHED) in
+    let cfk = hkdf_expand_label(chts, FINISHED) in
+    (* Server certificate *)
+    in(c, server_certificate:bitstring);
+    let(=CERTIFICATE, server_cert:Cert_t) = dec(server_certificate, shts) in 
+    let(server_id:Id_t, spk:PK_t) = checkcert(server_cert, ca_pk) in
+    (* Verify transcript hash *)
+    in(c, server_certificate_verify:bitstring);
+    let (=CERTIFICATE_VERIFY, cv:Sig_t) = dec(server_certificate_verify, shts) in   
+    let transcript_hash = checksign(cv, spk) in
+    if transcript_hash = hash((client_hello, server_hello, server_certificate)) then
+    (* Verify server finished *)
+    in(c, server_finished:bitstring);
+    let (=FINISHED, server_finished_mac:MAC_t) = dec(server_finished, shts) in
+    if server_finished_mac = mac(hash((client_hello, server_hello, server_certificate, server_certificate_verify)), sfk) then
+    (* Send client certificate *)
+    let client_certificate = enc((CERTIFICATE, client_cert), chts) in
+    out(c, client_certificate);
+    (* Client certificate verify *)
+    let transcript_hash_client = hash((client_hello, server_hello, server_certificate, server_certificate_verify, server_finished, client_certificate)) in 
+    let client_certificate_verify = enc((CERTIFICATE_VERIFY, sign(transcript_hash_client, csk)), chts) in 
+    out(c, client_certificate_verify);
+    (* Send client finished *)
+    let client_finished = mac(hash((client_hello, server_hello, server_certificate, server_certificate_verify, server_finished, client_certificate, client_certificate_verify)), cfk) in
+    event ClientFinished(server_id, client_id, server_cert, client_cert, master_secret);
+    out(c, enc((FINISHED, client_finished), chts));
+
+    (* Application Traffic *)
+    let sats = derive_secret(handshake_secret, SATS, (client_hello, server_hello, server_certificate, server_certificate_verify, server_finished)) in
+    let cats = derive_secret(handshake_secret, CATS, (client_hello, server_hello, server_certificate, server_certificate_verify, server_finished)) in
+    0.
+
+process 
+    (* CA *)
+    new ca_sk:SK_t; let ca_pk = make_pk(ca_sk) in out(c, ca_pk);
+
+    (* Server certificate *)
+    new server_id:Id_t;
+    new server_sk:SK_t; let server_pk = make_pk(server_sk) in
+    let server_cert = signcert(server_id, server_pk, ca_sk) in out(c, server_cert);
+
+    (* Client certificate *)
+    new client_id:Id_t;
+    new client_sk:SK_t; let client_pk = make_pk(client_sk) in
+    let client_cert = signcert(client_id, client_pk, ca_sk) in out(c, client_cert);
+
+    !server(ca_pk, server_sk, server_cert, server_id) | !client(ca_pk, client_sk, client_cert, client_id)
+
